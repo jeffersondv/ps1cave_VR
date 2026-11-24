@@ -1,0 +1,95 @@
+using System.Collections;
+using UnityEngine;
+
+public class PlayerController : MonoBehaviour
+{
+    [Header("Referências")]
+    public DungeonGrid dungeonGrid;
+
+    [Header("Parâmetros de Movimento")]
+    public float moveSpeed = 7.0f; // Aumentado ligeiramente para maior fluidez
+    public float rotateSpeed = 500.0f; // Aumentado para transições de câmara mais rápidas
+    public float tileSize = 2.0f;
+
+    [Header("Posição Inicial no Grid (X, Z)")]
+    public int gridX = 1;
+    public int gridZ = 1;
+
+    private bool isMoving = false;
+
+    void Start()
+    {
+        // Posiciona o jogador no centro da célula inicial
+        transform.position = new Vector3(gridX * tileSize, tileSize / 2f, gridZ * tileSize);
+        transform.rotation = Quaternion.LookRotation(Vector3.forward);
+    }
+
+    void Update()
+    {
+        if (isMoving) return;
+
+        // Substituição de Input.GetKeyDown por Input.GetKey para detetar a tecla mantida premida
+        if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow))
+        {
+            TryMove(transform.forward);
+        }
+        else if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow))
+        {
+            TryMove(-transform.forward);
+        }
+        else if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow))
+        {
+            StartCoroutine(Rotate(-90f));
+        }
+        else if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow))
+        {
+            StartCoroutine(Rotate(90f));
+        }
+    }
+
+    void TryMove(Vector3 direction)
+    {
+        Vector3 targetPos = transform.position + direction * tileSize;
+
+        // Converte posição do mundo para índice do Grid
+        int targetGridX = Mathf.RoundToInt(targetPos.x / tileSize);
+        int targetGridZ = Mathf.RoundToInt(targetPos.z / tileSize);
+
+        if (dungeonGrid != null && dungeonGrid.IsWalkable(targetGridX, targetGridZ))
+        {
+            gridX = targetGridX;
+            gridZ = targetGridZ;
+            StartCoroutine(MoveTo(targetPos));
+        }
+    }
+
+    IEnumerator MoveTo(Vector3 targetPosition)
+    {
+        isMoving = true;
+        while (Vector3.Distance(transform.position, targetPosition) > 0.001f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
+            yield return null;
+        }
+        transform.position = targetPosition;
+        isMoving = false;
+    }
+
+    IEnumerator Rotate(float angle)
+    {
+        isMoving = true;
+        Quaternion startRotation = transform.rotation;
+        Quaternion targetRotation = transform.rotation * Quaternion.Euler(0, angle, 0);
+
+        float progress = 0f;
+        while (progress < 1f)
+        {
+            progress += Time.deltaTime * (rotateSpeed / 90f);
+            transform.rotation = Quaternion.Slerp(startRotation, targetRotation, progress);
+            yield return null;
+        }
+
+        transform.rotation = targetRotation;
+        isMoving = false;
+    }
+}

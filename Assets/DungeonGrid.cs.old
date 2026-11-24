@@ -1,0 +1,72 @@
+using UnityEngine;
+
+public class DungeonGrid : MonoBehaviour
+{
+    [Header("Prefabs dos Blocos")]
+    public GameObject wallPrefab;
+    public GameObject floorPrefab;
+    public GameObject ceilingPrefab;
+
+    [Header("Configurações da Grade")]
+    public float tileSize = 2.0f; // Tamanho de cada célula no mundo 3D
+
+    // Matriz 2D da Dungeon (1 = Parede, 0 = Caminho)
+    private int[,] map = new int[,]
+    {
+        {1, 1, 1, 1, 1, 1, 1, 1},
+        {1, 0, 0, 0, 1, 0, 0, 1},
+        {1, 0, 1, 0, 1, 0, 1, 1},
+        {1, 0, 1, 0, 0, 0, 0, 1},
+        {1, 0, 1, 1, 1, 1, 0, 1},
+        {1, 0, 0, 0, 0, 1, 0, 1},
+        {1, 1, 1, 1, 1, 1, 1, 1}
+    };
+
+    void Awake()
+    {
+        GenerateDungeon();
+    }
+
+    void GenerateDungeon()
+    {
+        int height = map.GetLength(0); // Eixo Z
+        int width = map.GetLength(1);  // Eixo X
+
+        for (int z = 0; z < height; z++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                Vector3 position = new Vector3(x * tileSize, 0, z * tileSize);
+
+                if (map[z, x] == 1)
+                {
+                    // Instancia Bloco de Parede
+                    if (wallPrefab != null)
+                        Instantiate(wallPrefab, position + Vector3.up * (tileSize / 2f), Quaternion.identity, transform);
+                }
+                else
+                {
+                    // Instancia Chão
+                    if (floorPrefab != null)
+                        Instantiate(floorPrefab, position, Quaternion.identity, transform);
+
+                    // Instancia Teto
+                    if (ceilingPrefab != null)
+                        Instantiate(ceilingPrefab, position + Vector3.up * tileSize, Quaternion.Euler(180, 0, 0), transform);
+                }
+            }
+        }
+    }
+
+    // Verifica se a coordenada no grid é navegável
+    public bool IsWalkable(int gridX, int gridZ)
+    {
+        int height = map.GetLength(0);
+        int width = map.GetLength(1);
+
+        if (gridX < 0 || gridX >= width || gridZ < 0 || gridZ >= height)
+            return false;
+
+        return map[gridZ, gridX] == 0;
+    }
+}

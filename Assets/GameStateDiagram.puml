@@ -1,0 +1,81 @@
+@startuml
+title Estados da Dungeon - PS1 Cave
+
+hide empty description
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F4F7FA
+  BorderColor #34495E
+  ArrowColor #34495E
+  FontColor #1F2933
+}
+
+[*] --> JogoAtivo : iniciar partida
+
+state "Jogo ativo" as JogoAtivo {
+  [*] --> Hall
+
+  state "Hall (índice 0)" as Hall
+  state "Andar 0 (índice 1)" as Andar0
+  state "Andar 1 (índice 2)" as Andar1
+  state "Andar 2 (índice 3)" as Andar2
+  state "Andar 3 (índice 4)" as Andar3
+  state "Encontro com o dragão" as EncontroDragao
+
+  Hall --> Andar0 : pisa em StairsDown\ncurrentFloorIndex + 1
+  Andar0 --> Hall : pisa em StairsUp\ncurrentFloorIndex - 1
+  Andar0 --> Andar1 : pisa em StairsDown\ncurrentFloorIndex + 1
+  Andar1 --> Andar0 : pisa em StairsUp\ncurrentFloorIndex - 1
+  Andar1 --> Andar2 : pisa em StairsDown\ncurrentFloorIndex + 1
+  Andar2 --> Andar1 : pisa em StairsUp\ncurrentFloorIndex - 1
+  Andar2 --> Andar3 : pisa em StairsDown\ncurrentFloorIndex + 1
+  Andar3 --> Andar2 : pisa em StairsUp\ncurrentFloorIndex - 1
+
+  Andar1 --> Andar1 : interage com Chest\nrecebe a Chave do Calabouço
+  Andar2 --> Andar2 : coleta KeyItem ou interage com Chest\nrecebe a Chave do Calabouço
+  Andar3 --> Andar3 : interage com NPC "Cristal"\nrecebe o Cristal Mágico
+
+  Andar1 --> Andar1 : abre DoorKey com a chave\nchave é consumida
+  Andar2 --> Andar2 : abre DoorKey com a chave\nchave é consumida
+  Andar3 --> Andar3 : abre DoorMagic com o cristal\ncristal permanece no inventário
+
+  Andar3 --> EncontroDragao : aproxima-se do tile Dragon\nativa o dragão e congela movimento
+  EncontroDragao --> EncontroDragao : jogador interage com NPC
+}
+
+state "Vitória" as Vitoria
+state "Game Over" as GameOver
+
+JogoAtivo --> Vitoria : pisa no tile EndGame\nEndGame()
+JogoAtivo --> GameOver : timer chega a zero
+EncontroDragao --> GameOver : interage com o dragão\nFinishCountdown()
+
+Vitoria : Exibe "Fim de Jogo, Parabéns!!"
+Vitoria : Mostra tempo gasto e NPCs distintos
+GameOver : Exibe a tela de derrota
+
+Vitoria --> [*]
+GameOver --> [*]
+
+note right of JogoAtivo
+  O timer conta durante a exploração
+  e continua ao trocar de andar.
+  StairsUp/Down só alteram o andar
+  se o índice calculado for válido.
+
+  Inventário:
+  - Chave do Calabouço: obtida do baú
+    ou ao coletar KeyItem; consumida
+    ao abrir DoorKey.
+  - Cristal Mágico: obtido ao interagir
+    com o NPC Cristal; permite abrir
+    DoorMagic e não é consumido.
+end note
+
+note bottom of EncontroDragao
+  O jogador pode interagir mesmo com
+  o movimento congelado. A interação
+  com o dragão encerra a partida.
+end note
+
+@enduml

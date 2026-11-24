@@ -136,3 +136,20 @@ crashlytics-build.properties
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# --- ps1cave_VR ---
+# Plastic SCM
+.plastic/
+ignore.conf
+/[Aa]ssets/Plugins/PlasticSCM*
+# IDE
+.vscode/
+.idea/
+# Backup antigo de assets (91 MB)
+.oldAssets/
+# Capturas de teste
+/[Aa]ssets/Screenshots/
+/[Aa]ssets/Screenshots.meta
+# SO
+.DS_Store
+Thumbs.db
