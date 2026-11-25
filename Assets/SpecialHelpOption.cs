@@ -1,12 +1,15 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
 /// Opção "Ajuda especial" selecionável em VR: um círculo vermelho que aparece no mundo,
 /// ao lado do NPC, depois de N interações. Seleção por olhar:
 ///   - olhar para o círculo e segurar o olhar até o anel encher (dwell), ou
-///   - olhar para o círculo e apertar A/X / gatilho (ou E/Espaço/clique no Editor).
+///   - olhar para o círculo e apertar A/X / gatilho (ou E/Espaço/clique no Editor), ou
+///   - apontar o laser do controle para o círculo e apertar o gatilho.
 /// Ao selecionar, pede a resposta ao Ollama através do DungeonNPC.
 ///
 /// Os visuais são criados por código (SpriteRenderer + LineRenderer + TextMeshPro),
@@ -35,6 +38,10 @@ public class SpecialHelpOption : MonoBehaviour
     [Tooltip("Folga angular extra para considerar que está olhando (graus)")]
     public float gazeToleranceDeg = 3f;
 
+    [Header("Porta escondida")]
+    [Tooltip("Ao usar a Ajuda especial, as portas escondidas do andar brilham por este tempo (s). 0 = desliga.")]
+    public float hiddenDoorGlowSeconds = 30f;
+
     [Header("Cores")]
     public Color circleColor = new Color(0.85f, 0.05f, 0.05f, 1f);
     public Color circleGazedColor = new Color(1f, 0.2f, 0.2f, 1f);
@@ -44,6 +51,8 @@ public class SpecialHelpOption : MonoBehaviour
     SpriteRenderer disc;
     LineRenderer ring;
     TextMeshPro text;
+    XRSimpleInteractable rayTarget;
+    bool rayHovered;
     const int RingSegments = 48;
 
     bool visible;
@@ -132,6 +141,7 @@ public class SpecialHelpOption : MonoBehaviour
 
         if (cam == null) cam = Camera.main;
         if (cam == null) return;
+        rayHovered = rayTarget != null && rayTarget.isHovered;
 
         // Olhar: ângulo entre a frente da câmera e o centro do círculo
         Vector3 toOption = transform.position - cam.transform.position;
@@ -139,13 +149,15 @@ public class SpecialHelpOption : MonoBehaviour
         float maxAngle = Mathf.Atan2(radius, toOption.magnitude) * Mathf.Rad2Deg + gazeToleranceDeg;
         gazed = angle <= maxAngle;
 
+        if (HelpMenu.IsOpen) return;
+
         bool pressed = OpenXRControllerInput.InteractPressedThisFrame;
         Keyboard kb = Keyboard.current;
         Mouse mouse = Mouse.current;
         if (kb != null && (kb.eKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame)) pressed = true;
         if (mouse != null && mouse.leftButton.wasPressedThisFrame) pressed = true;
 
-        if (gazed)
+        if (gazed || rayHovered)
         {
             dwell += Time.deltaTime;
             if (pressed || dwell >= dwellTime)
@@ -167,6 +179,13 @@ public class SpecialHelpOption : MonoBehaviour
         DungeonNPC npc = targetNpc;
         string title = targetTitle;
         SetVisible(false);
+
+        // Faz a porta escondida do andar brilhar para o jogador encontrá-la
+        if (hiddenDoorGlowSeconds > 0f)
+        {
+            int doors = HiddenDoorGlow.HighlightAll(hiddenDoorGlowSeconds);
+            if (doors > 0) Debug.Log($"[Ajuda especial] {doors} porta(s) escondida(s) brilhando por {hiddenDoorGlowSeconds:0}s.");
+        }
 
         if (npc == null) return;
         npc.RequestSpecialHelp(title);
@@ -226,12 +245,20 @@ public class SpecialHelpOption : MonoBehaviour
         text.sortingOrder = 2;
         tGO.transform.localPosition = new Vector3(0f, -(radius + 0.05f), 0f);
         // A raiz tem +Z apontando para longe da câmera: TMP e sprite já ficam de frente para ela.
+
+        // Alvo para o laser dos controles (XR Ray Interactor): gatilho sobre o círculo seleciona
+        var hit = discGO.AddComponent<SphereCollider>();
+        hit.isTrigger = true;
+        hit.radius = 0.5f; // sprite de 1 unidade, escalado para o diâmetro do círculo
+        rayTarget = discGO.AddComponent<XRSimpleInteractable>();
+        rayTarget.selectEntered.AddListener(_ => { if (visible) Select(); });
     }
 
     void UpdateVisuals()
     {
-        disc.color = gazed ? circleGazedColor : circleColor;
-        visualRoot.localScale = Vector3.one * (gazed ? 1.12f : 1f);
+        bool highlight = gazed || rayHovered;
+        disc.color = highlight ? circleGazedColor : circleColor;
+        visualRoot.localScale = Vector3.one * (highlight ? 1.12f : 1f);
 
         float progress = dwellTime > 0f ? Mathf.Clamp01(dwell / dwellTime) : 0f;
         int count = Mathf.Max(0, Mathf.CeilToInt(progress * RingSegments) + 1);

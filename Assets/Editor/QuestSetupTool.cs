@@ -258,9 +258,18 @@ public static class QuestSetupTool
     {
         foreach (Canvas canvas in Object.FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
-            if (!canvas.isRootCanvas || canvas.renderMode != RenderMode.ScreenSpaceOverlay) continue;
+            if (!canvas.isRootCanvas) continue;
             if (canvas.gameObject.tag == "EditorOnly") continue;
             if (canvas.transform.root.name.Contains("XR Device Simulator")) continue;
+
+            // UI sempre por cima das paredes (o plano do Canvas atravessa a geometria ao girar a cabeça)
+            if (canvas.renderMode != RenderMode.WorldSpace && canvas.GetComponent<UIAlwaysOnTop>() == null)
+            {
+                Undo.AddComponent<UIAlwaysOnTop>(canvas.gameObject);
+                log.AppendLine($"Canvas '{canvas.name}': UIAlwaysOnTop adicionado (UI não é cortada pelas paredes).");
+            }
+
+            if (canvas.renderMode != RenderMode.ScreenSpaceOverlay) continue;
 
             Undo.RecordObject(canvas, "Canvas to camera");
             canvas.renderMode = RenderMode.ScreenSpaceCamera;

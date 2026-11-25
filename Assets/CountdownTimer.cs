@@ -141,19 +141,9 @@ public class CountdownTimer : MonoBehaviour
 
         if (restartButton != null)
         {
-            RectTransform buttonRect = restartButton.transform as RectTransform;
-            if (buttonRect != null)
-            {
-                buttonRect.SetParent(overlayRect, false);
-                buttonRect.anchorMin = new Vector2(0.5f, 0.5f);
-                buttonRect.anchorMax = new Vector2(0.5f, 0.5f);
-                buttonRect.pivot = new Vector2(0.5f, 0.5f);
-                buttonRect.anchoredPosition = new Vector2(0f, -180f);
-                buttonRect.sizeDelta = new Vector2(180f, 40f);
-                buttonRect.SetAsLastSibling();
-            }
-
-            restartButton.SetActive(true);
+            // O HUD fica preso à cabeça e não recebe o laser: o botão vai para um painel em
+            // World Space na frente do jogador (laser + gatilho, A/X, mouse ou R no Editor)
+            WorldSpaceRestartButton.Show(restartButton);
         }
     }
 
@@ -185,7 +175,7 @@ public class CountdownTimer : MonoBehaviour
     {
         hasFinished = true;
 
-            stopSeamlessSound();
+            StopSeamlessSound();
 
             if (prefabGameOver != null)
             {
@@ -207,7 +197,7 @@ public class CountdownTimer : MonoBehaviour
             }
     }
 
-    public void stopSeamlessSound()
+    public void StopSeamlessSound()
     {
         if (seamlessAudioSequencer != null)
         {
@@ -220,6 +210,36 @@ public class CountdownTimer : MonoBehaviour
                 this);
         }
     }
+
+    public void StartSeamlessSound()
+    {
+        if (seamlessAudioSequencer != null)
+        {
+            seamlessAudioSequencer.StartSeamlessSound();
+        }
+        else
+        {
+            Debug.LogError(
+                "CountdownTimer: atribua o SeamlessAudioSequencer no Inspector.",
+                this);
+        }
+    }
+
+    public void SetLoopSource(AudioSource loop)
+    {
+        if (seamlessAudioSequencer != null)
+        {
+            seamlessAudioSequencer.SetLoopSource(loop);
+        }
+    }
+
+    public void SetIntroSource(AudioSource intro)
+    {
+        if (seamlessAudioSequencer != null)
+        {
+            seamlessAudioSequencer.SetIntroSource(intro);
+        }
+    }    
 
     public void EndGame()
     {

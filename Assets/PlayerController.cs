@@ -100,14 +100,19 @@ public class PlayerController : MonoBehaviour
     void Update()
     {
         Keyboard keyboard = Keyboard.current;
-        bool xrInteractPressed = OpenXRControllerInput.InteractPressedThisFrame;
+        // A/X sempre; gatilho só se o laser não estiver sobre UI/objeto interativo
+        bool xrInteractPressed = OpenXRControllerInput.GameplayInteractPressedThisFrame;
 
         if (keyboard != null && keyboard.pKey.wasPressedThisFrame)
         {
             DebugPlayerPosition();
         }
 
-        // Oculus Touch: botão A/X ou gatilho; E/Espaço continuam disponíveis no editor.
+        // Menu de ajuda aberto: o jogo fica parado
+        if (HelpMenu.IsOpen)
+            return;
+
+        // Quest 2/3: botão A/X ou gatilho; E/Espaço continuam disponíveis no editor.
         // Se o jogador está olhando para a opção "Ajuda especial", o botão é dela
         if (SpecialHelpOption.IsGazed)
             xrInteractPressed = false;
@@ -292,6 +297,10 @@ public class PlayerController : MonoBehaviour
                 bool opened = door.TryOpenDoor(inventory, isMagicPuzzleSolved);
                 if (opened)
                 {
+                    // Porta escondida encontrada: para o brilho da "Ajuda especial"
+                    HiddenDoorGlow glow = door.GetComponent<HiddenDoorGlow>();
+                    if (glow != null) glow.MarkUsed();
+
                     int doorGridX = Mathf.RoundToInt(checkPos.x / tileSize);
                     int doorGridZ = Mathf.RoundToInt(checkPos.z / tileSize);
                     dungeonGrid.SetTileType(doorGridX, doorGridZ, TileType.DoorOpen);

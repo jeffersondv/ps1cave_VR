@@ -34,4 +34,41 @@ public class SeamlessAudioSequencer : MonoBehaviour
 
         enabled = false;
     }
+
+    public void SetLoopSource(AudioSource audioSource)
+    {
+        this.loopSource = audioSource;
+    }
+
+    public void SetIntroSource(AudioSource audioSource)
+    {
+        this.introSource = audioSource;
+    }
+
+    public void StartSeamlessSound()
+    {
+        // Define o tempo exato do clock de áudio para o início (0.1s a partir do Start)
+        double startTime = AudioSettings.dspTime + 0.1;
+
+        if (introSource != null)
+        {
+            introSource.PlayScheduled(startTime);
+        }
+        
+        // Agenda o segundo áudio para iniciar exatamente quando a intro terminar
+        if (loopSource != null)
+        {
+            loopSource.loop = true;
+            if (introSource != null)
+            {
+                loopSource.PlayScheduled(startTime + (double)introSource.clip.length);
+            }
+            else
+            {
+                // Se não houver intro, inicia o loop imediatamente
+                loopSource.PlayScheduled(startTime);
+            }
+        }
+    }
+
 }

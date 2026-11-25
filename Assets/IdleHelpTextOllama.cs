@@ -30,6 +30,29 @@ public class IdleHelpTextOllama : MonoBehaviour
         public string objetivo;
         [Tooltip("Dicas fixas, da mais vaga para a mais direta. Usadas se o Ollama falhar.")]
         public List<string> dicasFixas = new List<string>();
+        [Tooltip("Etapas que dependem do estado do jogador (verificadas em ordem; a 1ª que valer substitui objetivo e dicas acima).")]
+        public List<HintStage> etapas = new List<HintStage>();
+    }
+
+    public enum HintCondition { Sempre, SemChave, ComChave, SemCristal, ComCristal }
+
+    [Serializable]
+    public class HintStage
+    {
+        [Tooltip("Quando esta etapa vale. ComChave inclui já ter usado a chave numa porta.")]
+        public HintCondition quando = HintCondition.Sempre;
+        [TextArea(2, 4)]
+        public string objetivo;
+        [Tooltip("Dicas da mais vaga para a mais direta.")]
+        public List<string> dicas = new List<string>();
+    }
+
+    public enum OllamaHintMode
+    {
+        [Tooltip("O jogo escolhe a dica certa e o Ollama só a reescreve com a voz do NPC (mais confiável).")]
+        ReescreverDica,
+        [Tooltip("O Ollama cria a dica a partir do contexto do andar e do estado (mais variado, menos preciso).")]
+        GerarComContexto
     }
 
     [Header("UI")]
@@ -51,11 +74,21 @@ public class IdleHelpTextOllama : MonoBehaviour
     public float movementThreshold = 0.02f;
 
     [Header("Dicas por andar")]
+    [Tooltip("ReescreverDica: a dica vem das etapas/dicas fixas e o Ollama só dá a voz do personagem.")]
+    public OllamaHintMode modo = OllamaHintMode.ReescreverDica;
     [Tooltip("Usa as dicas fixas quando o Ollama falhar ou não estiver configurado.")]
     public bool usarDicasFixasSemOllama = true;
     [Tooltip("Envia o estado do jogo (inventário, arredores) para a IA.")]
     public bool enviarEstadoDoJogo = true;
     public List<LevelHintConfig> dicasPorAndar = new List<LevelHintConfig>();
+    [Header("Tamanho da resposta")]
+    [Tooltip("Limite de palavras pedido ao modelo.")]
+    [Min(8)] public int maxPalavras = 25;
+    [Tooltip("A resposta é cortada (em fim de frase) se passar disto.")]
+    [Min(40)] public int maxCaracteres = 160;
+    [Tooltip("A persona do NPC é reduzida a este tamanho (personas longas confundem modelos pequenos).")]
+    [Min(0)] public int maxPersonaChars = 200;
+
     [Tooltip("Mostra no Console o prompt enviado e a resposta (para ajustar as dicas).")]
     public bool logPrompts = false;
 
@@ -66,19 +99,36 @@ public class IdleHelpTextOllama : MonoBehaviour
     private bool isTextShown = false;  // Controla se a dica já está visível
 
     private PlayerController player;
-    private PlayerInventory inventory;
     private int lastFloorIndex = -1;
-    private readonly Dictionary<int, int> hintsGivenPerFloor = new Dictionary<int, int>();
+    private readonly Dictionary<string, int> hintsGivenPerStage = new Dictionary<string, int>();
+    private string lastStageId;
     private readonly List<string> recentHints = new List<string>();
 
     private void Awake()
     {
         defaultPromptForOllama = promptForOllama;
         player = GetComponent<PlayerController>();
-        inventory = GetComponent<PlayerInventory>();
         if (ollamaManager == null) ollamaManager = GetComponent<OllamaManager>();
         if (dicasPorAndar == null || dicasPorAndar.Count == 0)
             dicasPorAndar = CreateDefaultLevelHints();
+        else
+            FillMissingStages(dicasPorAndar);
+    }
+
+    /// <summary>Andares salvos antes das "etapas" existirem recebem as etapas padrão.</summary>
+    public static bool FillMissingStages(List<LevelHintConfig> levels)
+    {
+        bool changed = false;
+        List<LevelHintConfig> defaults = CreateDefaultLevelHints();
+        foreach (LevelHintConfig cfg in levels)
+        {
+            if (cfg == null || (cfg.etapas != null && cfg.etapas.Count > 0)) continue;
+            LevelHintConfig def = defaults.Find(d => d.andar == cfg.andar);
+            if (def == null || def.etapas.Count == 0) continue;
+            cfg.etapas = def.etapas;
+            changed = true;
+        }
+        return changed;
     }
 
     // Preenche as dicas padrão ao adicionar o componente ou se a lista estiver vazia no Inspector
@@ -88,6 +138,8 @@ public class IdleHelpTextOllama : MonoBehaviour
     {
         if (dicasPorAndar == null || dicasPorAndar.Count == 0)
             dicasPorAndar = CreateDefaultLevelHints();
+        else
+            FillMissingStages(dicasPorAndar);
     }
 
     private void Start()
@@ -126,10 +178,26 @@ public class IdleHelpTextOllama : MonoBehaviour
             recentHints.Clear();
         }
 
+        // Mudou a etapa (pegou a chave, o cristal...): dicas anteriores não valem mais
+        string stageId = GameHintContext.CurrentStageId(player);
+        if (stageId != lastStageId)
+        {
+            lastStageId = stageId;
+            recentHints.Clear();
+        }
+
         float distanceMoved = Vector3.Distance(transform.position, lastPosition);
 
+        // Uma mensagem de diálogo (porta, NPC, item...) tem prioridade: esconde a dica
+        // para os textos não se sobreporem e só volta a contar a inatividade depois dela.
+        if (HelpMenu.IsOpen ||
+            (DialogueManager.Instance != null && DialogueManager.Instance.IsDialogueActive()))
+        {
+            if (isTextShown || isFetching || idleTimer > 0f)
+                ResetIdle();
+        }
         // Se o jogador está parado e ainda não buscamos o texto
-        if (distanceMoved < movementThreshold)
+        else if (distanceMoved < movementThreshold)
         {
             if (!isTextShown && !isFetching)
             {
@@ -155,25 +223,41 @@ public class IdleHelpTextOllama : MonoBehaviour
     {
         isFetching = true;
 
-        int floor = CurrentFloor;
-        LevelHintConfig level = GetLevelConfig(floor);
-        int hintNumber = hintsGivenPerFloor.TryGetValue(floor, out int n) ? n : 0;
+        LevelHintConfig level = GetLevelConfig(CurrentFloor);
+        string stageId = GameHintContext.CurrentStageId(player);
+        int hintNumber = hintsGivenPerStage.TryGetValue(stageId, out int n) ? n : 0;
+        string fixedHint = GameHintContext.SelectHint(level, player, hintNumber, out string objective);
 
         string response = null;
-        if (ollamaManager != null && (level != null || !string.IsNullOrWhiteSpace(promptForOllama)))
+        if (ollamaManager != null)
         {
-            string systemPrompt = BuildSystemPrompt(level, hintNumber);
-            string userMessage = BuildUserMessage(level, hintNumber);
-            if (logPrompts)
-                Debug.Log($"[IdleHelp] SYSTEM:\n{systemPrompt}\n\n[IdleHelp] USER:\n{userMessage}", this);
-            response = await ollamaManager.SendPromptAsync(systemPrompt, userMessage);
-            if (logPrompts)
-                Debug.Log($"[IdleHelp] RESPOSTA (dica #{hintNumber + 1}): {response}", this);
+            string persona = string.IsNullOrWhiteSpace(promptForOllama) ? defaultPromptForOllama : promptForOllama;
+            string systemPrompt, userMessage;
+            if (modo == OllamaHintMode.ReescreverDica)
+            {
+                systemPrompt = GameHintContext.RewriteSystemPrompt(persona, maxPersonaChars, maxPalavras);
+                userMessage = string.IsNullOrWhiteSpace(fixedHint) ? null : "Dica: " + fixedHint;
+            }
+            else
+            {
+                systemPrompt = BuildSystemPrompt(level, objective, persona, hintNumber);
+                userMessage = BuildUserMessage(hintNumber);
+            }
+
+            if (userMessage != null)
+            {
+                if (logPrompts)
+                    Debug.Log($"[IdleHelp] SYSTEM:\n{systemPrompt}\n\n[IdleHelp] USER:\n{userMessage}", this);
+                response = await ollamaManager.SendPromptAsync(systemPrompt, userMessage);
+                response = GameHintContext.CleanResponse(response, 2, maxCaracteres);
+                if (logPrompts)
+                    Debug.Log($"[IdleHelp] RESPOSTA (dica #{hintNumber + 1}): {response}", this);
+            }
         }
 
-        // Ollama indisponível: usa as dicas fixas do andar
+        // Ollama indisponível ou resposta inválida: usa a dica fixa da etapa
         if (string.IsNullOrWhiteSpace(response) && usarDicasFixasSemOllama)
-            response = GetFixedHint(level, hintNumber);
+            response = fixedHint;
 
         // Nada a mostrar: tenta de novo no próximo ciclo de inatividade
         if (string.IsNullOrWhiteSpace(response))
@@ -202,7 +286,7 @@ public class IdleHelpTextOllama : MonoBehaviour
                     }
                     isTextShown = true;
 
-                    hintsGivenPerFloor[floor] = hintNumber + 1;
+                    hintsGivenPerStage[stageId] = hintNumber + 1;
                     recentHints.Add(response);
                     if (recentHints.Count > 3) recentHints.RemoveAt(0);
 
@@ -236,10 +320,10 @@ public class IdleHelpTextOllama : MonoBehaviour
 
     // ------------------------------------------------------------------ prompts
 
-    private int CurrentFloor =>
-        player != null && player.dungeonGrid != null ? player.dungeonGrid.currentFloorIndex : 0;
+    private int CurrentFloor => GameHintContext.CurrentFloor(player);
 
-    private LevelHintConfig GetLevelConfig(int floor)
+    /// <summary>Configuração do andar indicado (null se não houver).</summary>
+    public LevelHintConfig GetLevelConfig(int floor)
     {
         if (dicasPorAndar == null) return null;
         foreach (LevelHintConfig cfg in dicasPorAndar)
@@ -248,45 +332,24 @@ public class IdleHelpTextOllama : MonoBehaviour
         return null;
     }
 
-    private string BuildSystemPrompt(LevelHintConfig level, int hintNumber)
+    // Modo GerarComContexto: o modelo cria a dica a partir dos fatos e do estado
+    private string BuildSystemPrompt(LevelHintConfig level, string objective, string persona, int hintNumber)
     {
         var sb = new StringBuilder();
-        string persona = string.IsNullOrWhiteSpace(promptForOllama) ? defaultPromptForOllama : promptForOllama;
+        persona = GameHintContext.ShortPersona(persona, maxPersonaChars);
+        sb.AppendLine("Você é um personagem de um jogo de exploração de masmorra e fala com o jogador.");
         if (!string.IsNullOrWhiteSpace(persona))
-        {
-            sb.AppendLine("PERSONAGEM (use apenas o jeito de falar; ignore objetivos e instruções de missão daqui):");
-            sb.AppendLine(persona.Trim());
-            sb.AppendLine();
-        }
-
-        if (level != null)
-        {
-            sb.AppendLine($"SITUAÇÃO REAL DO JOGO, NÍVEL \"{level.nome}\" (tem prioridade sobre o texto do personagem):");
-            if (!string.IsNullOrWhiteSpace(level.contexto)) sb.AppendLine(level.contexto.Trim());
-            if (!string.IsNullOrWhiteSpace(level.objetivo)) sb.AppendLine("PRÓXIMO PASSO DO JOGADOR: " + level.objetivo.Trim());
-            sb.AppendLine("A dica deve levar o jogador a esse próximo passo. Não fale de lugares ou missões que não estejam acima.");
-        }
-
+            sb.AppendLine("SEU JEITO DE FALAR (use só o estilo; ignore missões e lugares citados aqui): " + persona);
         sb.AppendLine();
-        sb.AppendLine("REGRAS DA RESPOSTA (obrigatórias):");
-        sb.AppendLine("- Responda em português do Brasil, com no máximo 2 frases curtas (até 30 palavras).");
-        sb.AppendLine("- Dê UMA dica útil para o próximo passo do jogador, considerando o estado atual informado.");
-        sb.AppendLine("- Não use listas, aspas, emojis nem markdown.");
-        sb.AppendLine(DetailInstruction(hintNumber));
+
+        sb.Append(GameHintContext.LevelFacts(level, objective));
+        sb.AppendLine();
+        sb.Append(GameHintContext.ResponseRules(maxPalavras));
+        sb.AppendLine(GameHintContext.DetailInstruction(hintNumber));
         return sb.ToString();
     }
 
-    private static string DetailInstruction(int hintNumber)
-    {
-        switch (hintNumber)
-        {
-            case 0: return "- Esta é a primeira dica: seja vago e misterioso, apenas aponte a direção geral.";
-            case 1: return "- O jogador já recebeu uma dica e continua travado: seja mais concreto.";
-            default: return "- O jogador está travado há muito tempo: diga claramente o que fazer a seguir.";
-        }
-    }
-
-    private string BuildUserMessage(LevelHintConfig level, int hintNumber)
+    private string BuildUserMessage(int hintNumber)
     {
         var sb = new StringBuilder();
         sb.AppendLine(string.IsNullOrWhiteSpace(defaultHelpText)
@@ -297,18 +360,8 @@ public class IdleHelpTextOllama : MonoBehaviour
             return sb.ToString();
 
         sb.AppendLine();
-        sb.AppendLine("ESTADO ATUAL DO JOGO:");
-        sb.AppendLine($"- Nível: {(level != null ? level.nome : "andar " + CurrentFloor)}");
-        if (inventory != null)
-        {
-            sb.AppendLine($"- Tem a chave: {SimNao(inventory.hasKey)}");
-            sb.AppendLine($"- Tem o cristal: {SimNao(inventory.hasCrystal)}");
-            sb.AppendLine($"- Aprendeu a magia: {SimNao(inventory.hasLearnedMagic)}");
-        }
-        string surroundings = DescribeSurroundings();
-        if (!string.IsNullOrEmpty(surroundings))
-            sb.AppendLine("- Arredores: " + surroundings);
-        sb.AppendLine($"- Dicas já recebidas neste nível: {hintNumber}");
+        sb.Append(GameHintContext.PlayerState(player));
+        sb.AppendLine($"- Dicas já recebidas nesta etapa: {hintNumber}");
 
         if (recentHints.Count > 0)
         {
@@ -318,65 +371,14 @@ public class IdleHelpTextOllama : MonoBehaviour
         return sb.ToString();
     }
 
-    private string GetFixedHint(LevelHintConfig level, int hintNumber)
-    {
-        if (level == null || level.dicasFixas == null || level.dicasFixas.Count == 0)
-            return null;
-        // Da mais vaga para a mais direta; depois fica na última
-        return level.dicasFixas[Mathf.Min(hintNumber, level.dicasFixas.Count - 1)];
-    }
-
-    private static string SimNao(bool v) => v ? "sim" : "não";
-
-    // Descreve o que há à frente, à esquerda, à direita e atrás do jogador
-    private string DescribeSurroundings()
-    {
-        if (player == null || player.dungeonGrid == null) return null;
-
-        Vector3 f = player.transform.forward;
-        Vector2Int fwd = Mathf.Abs(f.x) > Mathf.Abs(f.z)
-            ? new Vector2Int(f.x > 0 ? 1 : -1, 0)
-            : new Vector2Int(0, f.z > 0 ? 1 : -1);
-        Vector2Int right = new Vector2Int(fwd.y, -fwd.x);
-
-        string Look(Vector2Int d) => TileName(player.dungeonGrid.GetTileType(player.gridX + d.x, player.gridZ + d.y));
-
-        return $"à frente {Look(fwd)}; à esquerda {Look(-right)}; à direita {Look(right)}; atrás {Look(-fwd)}.";
-    }
-
-    private static string TileName(TileType tile)
-    {
-        switch (tile)
-        {
-            case TileType.Floor: return "corredor livre";
-            case TileType.Wall: return "parede";
-            case TileType.DoorHidden: return "parede";   // passagem secreta: não revelar pelo estado
-            case TileType.StairsUp: return "escada para subir";
-            case TileType.StairsDown: return "escada para descer";
-            case TileType.DoorNormal: return "porta comum";
-            case TileType.DoorKey: return "porta trancada (precisa de chave)";
-            case TileType.DoorMagic: return "porta mágica (precisa do cristal ou de magia)";
-            case TileType.DoorOpen: return "porta aberta";
-            case TileType.Trap: return "chão suspeito";
-            case TileType.Pit: return "buraco";
-            case TileType.NPCChest: return "um baú";
-            case TileType.Dragon: return "uma criatura enorme e perigosa";
-            case TileType.NPCCristal: return "um guardião";
-            case TileType.NPC:
-            case TileType.NPC2:
-            case TileType.NPC3:
-            case TileType.NPC4:
-            case TileType.NPCQuestion: return "um personagem";
-            case TileType.EndGame: return "a saída";
-            default: return tile.ToString();
-        }
-    }
-
     // ------------------------------------------------------------------ padrões
 
     /// <summary>
     /// Dicas padrão baseadas nos mapas de DungeonGridLevelsDoors. Revise no Inspector.
     /// </summary>
+    static HintStage Stage(HintCondition when, string objective, params string[] hints) =>
+        new HintStage { quando = when, objetivo = objective, dicas = new List<string>(hints) };
+
     public static List<LevelHintConfig> CreateDefaultLevelHints()
     {
         return new List<LevelHintConfig>
@@ -393,6 +395,12 @@ public class IdleHelpTextOllama : MonoBehaviour
                     "Quem guarda este salão sabe mais do que diz. Insista na conversa.",
                     "Nem toda parede é sólida. Procure no meio do corredor.",
                     "Fique no meio do corredor, vire-se para a parede e siga em frente: a passagem secreta leva à escada."
+                },
+                etapas = new List<HintStage>
+                {
+                    Stage(HintCondition.ComCristal, "Subir até o primeiro andar e abrir a porta mágica com o cristal.",
+                        "O cristal pulsa: a porta que ele abre fica acima de você.",
+                        "Volte pela escada e procure a porta mágica no primeiro andar.")
                 }
             },
             new LevelHintConfig
@@ -406,6 +414,13 @@ public class IdleHelpTextOllama : MonoBehaviour
                     "A saída está perto, mas protegida por uma força mágica.",
                     "A porta mágica não cede sem o cristal. Ele está nas profundezas.",
                     "Desça a escada deste andar e procure o cristal; depois volte aqui e atravesse a porta mágica."
+                },
+                etapas = new List<HintStage>
+                {
+                    Stage(HintCondition.ComCristal, "Usar o cristal na porta mágica deste andar para sair da caverna.",
+                        "O cristal reage a uma força mágica próxima.",
+                        "Leve o cristal até a porta mágica deste andar.",
+                        "Vá até a porta mágica e interaja com ela: o cristal vai abri-la e libertar você.")
                 }
             },
             new LevelHintConfig
@@ -419,6 +434,12 @@ public class IdleHelpTextOllama : MonoBehaviour
                     "O caminho continua para baixo.",
                     "Contorne os corredores: há uma escada para descer.",
                     "Ignore a porta trancada por enquanto e siga pelos corredores até a escada para descer."
+                },
+                etapas = new List<HintStage>
+                {
+                    Stage(HintCondition.ComCristal, "Subir a escada de volta ao primeiro andar e abrir a porta mágica.",
+                        "Com o cristal em mãos, o caminho agora é para cima.",
+                        "Encontre a escada para subir e volte ao primeiro andar.")
                 }
             },
             new LevelHintConfig
@@ -432,6 +453,16 @@ public class IdleHelpTextOllama : MonoBehaviour
                     "Algo guardado aqui abrirá uma porta lá embaixo.",
                     "Procure o baú: dentro dele há uma chave.",
                     "Interaja com o baú para pegar a chave e depois desça a escada deste andar."
+                },
+                etapas = new List<HintStage>
+                {
+                    Stage(HintCondition.ComCristal, "Subir de volta ao primeiro andar e abrir a porta mágica.",
+                        "Com o cristal em mãos, o caminho agora é para cima.",
+                        "Procure a escada para subir e volte ao primeiro andar."),
+                    Stage(HintCondition.ComChave, "Descer a escada até o andar mais profundo.",
+                        "A chave pesa no seu bolso: a porta dela fica mais abaixo.",
+                        "Procure a escada para descer deste andar.",
+                        "Siga até a escada para descer: a porta trancada está no andar de baixo.")
                 }
             },
             new LevelHintConfig
@@ -446,6 +477,17 @@ public class IdleHelpTextOllama : MonoBehaviour
                     "Cuidado: nem toda criatura aqui quer conversar.",
                     "Evite o dragão. Use a chave na porta trancada e procure o guardião do cristal.",
                     "Não fale com o dragão. Abra a porta trancada, fale com o Dezoriano para pegar o cristal e volte à porta mágica."
+                },
+                etapas = new List<HintStage>
+                {
+                    Stage(HintCondition.ComCristal, "Voltar subindo até o primeiro andar e abrir a porta mágica.",
+                        "O cristal é seu. Agora fuja das profundezas.",
+                        "Evite o dragão e suba as escadas até o primeiro andar.",
+                        "Suba todas as escadas até o primeiro andar e use o cristal na porta mágica."),
+                    Stage(HintCondition.SemChave, "Voltar ao andar de cima e pegar a chave no baú.",
+                        "Uma porta aqui exige algo que você deixou para trás.",
+                        "A porta trancada precisa da chave do baú do andar de cima.",
+                        "Suba a escada, pegue a chave no baú e volte para abrir a porta trancada.")
                 }
             }
         };

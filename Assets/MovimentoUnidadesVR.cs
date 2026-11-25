@@ -58,7 +58,7 @@ public class MovimentoUnidadesVR : MonoBehaviour
 
     void Update()
     {
-        if (playerController == null || !playerController.enabled)
+        if (playerController == null || !playerController.enabled || HelpMenu.IsOpen)
             return;
 
         Vector2 move = LerVetor(moveInput);

@@ -33,6 +33,7 @@ public class DoorInteractable : MonoBehaviour
                 if (inventory != null && inventory.hasKey)
                 {
                     inventory.hasKey = false; // Consome a chave
+                    inventory.usedKey = true;
                     if (DialogueManager.Instance != null)
                         DialogueManager.Instance.ShowMessage("Porta Desbloqueada", "Usou a chave para abrir a porta!");
                     Open();

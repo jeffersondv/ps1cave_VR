@@ -7,6 +7,12 @@ public class PlayerInventory : MonoBehaviour
     public bool hasLearnedMagic = false;
     public bool hasCrystal = false;
 
+    [Tooltip("Já usou a chave em uma porta trancada (a chave é consumida). Usado pelas dicas.")]
+    public bool usedKey = false;
+
+    /// <summary>Tem a chave agora ou já a usou: a etapa "buscar a chave" já passou.</summary>
+    public bool KeyObtained => hasKey || usedKey;
+
     // Método para coletar a chave
     public void CollectKey()
     {

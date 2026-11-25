@@ -32,6 +32,7 @@ public class DialogueManager : MonoBehaviour
     private bool isShowingMessage = false;
     private DialogueMessage currentMessage;
     private bool isShowingIdleHelp = false;
+    private int lastMessageShownFrame = -1;
 
     [Header("Configurações")]
     public float displayTime = 15.0f; // Tempo (em segundos) que a mensagem fica na tela
@@ -60,10 +61,15 @@ public class DialogueManager : MonoBehaviour
         Mouse mouse = Mouse.current;
 
         // Se houver uma mensagem visível, permite ao jogador avançar para a próxima
-        if (isShowingMessage && !SpecialHelpOption.IsGazed &&
+        // (A/X sempre; gatilho só se o laser não estiver sobre UI; nada com o menu de ajuda aberto)
+        // Não avança uma mensagem que acabou de aparecer neste mesmo frame (a mesma pressão
+        // que falou com o NPC/porta fecharia a mensagem na hora).
+        bool xrPressed = OpenXRControllerInput.GameplayInteractPressedThisFrame;
+        bool mouseClick = mouse != null && mouse.leftButton.wasPressedThisFrame && !GameInputGate.PointerBusy;
+        if (isShowingMessage && Time.frameCount != lastMessageShownFrame &&
+            !SpecialHelpOption.IsGazed && !HelpMenu.IsOpen &&
             ((keyboard != null && (keyboard.eKey.wasPressedThisFrame || keyboard.spaceKey.wasPressedThisFrame)) ||
-             (mouse != null && mouse.leftButton.wasPressedThisFrame) ||
-             OpenXRControllerInput.InteractPressedThisFrame))
+             mouseClick || xrPressed))
         {
             DisplayNextMessage();
         }
@@ -122,6 +128,7 @@ public class DialogueManager : MonoBehaviour
 
             if (dialoguePanel != null) dialoguePanel.SetActive(true);
             isShowingMessage = true;
+            lastMessageShownFrame = Time.frameCount;
         }
         else
         {

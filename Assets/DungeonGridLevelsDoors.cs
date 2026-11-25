@@ -113,22 +113,44 @@ public class DungeonGridLevelsDoors : MonoBehaviour
             int x = gridX + direction.x;
             int z = gridZ + direction.y;
 
-            if (GetTileType(x, z) != TileType.Dragon)
-                continue;
-
-            GameObject dragon = GetObjectAt(x, z);
-            if (dragon != null)
+            if (GetTileType(x, z) == TileType.Dragon)                
             {
-                dragon.SetActive(true);
-                player.FreezeMovement(); // Congela os movimentos do jogador
-                player.SetOllamaPromptFrom(dragon);
-                CountdownTimer countdownTimer = FindObjectOfType<CountdownTimer>();
-                if (countdownTimer != null)
+                GameObject dragon = GetObjectAt(x, z);
+                if (dragon != null)
                 {
-                    countdownTimer.stopSeamlessSound();
+                    dragon.SetActive(true);
+                    player.FreezeMovement(); // Congela os movimentos do jogador
+                    player.SetOllamaPromptFrom(dragon);
+                    CountdownTimer countdownTimer = FindObjectOfType<CountdownTimer>();
+                    if (countdownTimer != null)
+                    {
+                        countdownTimer.StopSeamlessSound();
+                    }
+                    dragon.GetComponent<NPCInteractable>().prefabSound.PlayScheduled(AudioSettings.dspTime + 0.1); // Toca o som do dragão
                 }
-                dragon.GetComponent<NPCInteractable>().prefabSound.PlayScheduled(AudioSettings.dspTime + 0.1); // Toca o som do dragão
-            }
+            }else
+            if (GetTileType(x, z) == TileType.NPCCristal)
+            {
+                Debug.Log($"Cristal! {gridX}, {gridZ} -> {x}, {z}");
+                GameObject npcCristal = GetObjectAt(x, z);
+                NPCInteractable cristalNpc = npcCristal != null ? npcCristal.GetComponent<NPCInteractable>() : null;
+                AudioSource cristalSound = cristalNpc != null ? cristalNpc.prefabSound : null;
+                // Só toca se o NPC ainda está no mapa e o som ainda não está tocando
+                // (o som é em loop e esta verificação roda a cada passo ao lado do NPC)
+                if (cristalNpc != null && npcCristal.activeInHierarchy && cristalSound != null && !cristalSound.isPlaying)
+                {
+                    CountdownTimer countdownTimer = FindAnyObjectByType<CountdownTimer>();
+                    if (countdownTimer != null)
+                    {
+                        countdownTimer.StopSeamlessSound();
+                        countdownTimer.SetLoopSource(cristalSound);
+                        countdownTimer.SetIntroSource(null);
+                        countdownTimer.StartSeamlessSound();
+                    }
+                    //cristalSound.PlayScheduled(AudioSettings.dspTime + 0.1); // Toca o som do NPC com cristal
+
+                }
+            }else continue;
         }
     }
 
@@ -305,6 +327,7 @@ public class DungeonGridLevelsDoors : MonoBehaviour
                     GameObject cristal = npc.GetComponent<NPCInteractable>().GetChestChild(); // Obtém a referência ao baú do NPC
                     GameObject InstanceChest = SpawnDynamicPrefab(cristal, x, z, npcYoffset, npcRotation);
                     npc.GetComponent<NPCInteractable>().SetChestChild(InstanceChest); // Associa o prefab do baú ao NPC
+                    RegisterObject(x, z, npc); // necessário para ActivateDragonAdjacentTo achar o NPC e tocar o som
                     ConfigureSpawnedNPC(npc, x, z);
                 }else if (tile == TileType.NPC5 && npc5Prefab != null)
                 {
@@ -332,6 +355,10 @@ public class DungeonGridLevelsDoors : MonoBehaviour
                     if (doorPrefabToSpawn != null)
                     {
                         GameObject spawnedDoor = Instantiate(doorPrefabToSpawn, objectPos, doorRotation, transform);
+
+                        // Porta escondida: pode brilhar quando o jogador usa a "Ajuda especial"
+                        if (tile == TileType.DoorHidden && spawnedDoor.GetComponent<HiddenDoorGlow>() == null)
+                            spawnedDoor.AddComponent<HiddenDoorGlow>();
 
                         // Se a porta já estava aberta na matriz, força a execução do Open() no instante em que nasce
                         if (tile == TileType.DoorOpen)
